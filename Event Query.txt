@@ -1,0 +1,329 @@
+/* Write your queries in this editor and hit Run button or Shift + Return to execute */
+
+WITH total_business AS(
+
+select
+EXTRACT (YEAR FROM ship_day) as YEAR
+, program
+, f3_vertical
+, item_type_keyword
+, count(distinct order_id) as total_shipped_orders 
+, sum(SHIPPED_UNITS_ORIG*our_price) as total_p_rev
+, SUM(SHIPPED_UNITS_ORIG) AS total_units
+    
+from  f3_booker.d_unified_cust_shipment_items as ducsi
+
+LEFT JOIN f3edw.dim_asin d
+ON ducsi.asin = d.asin
+AND ducsi.marketplace_id = d.marketplace_id
+
+
+    
+where ducsi.region_id = 1
+AND 
+(ducsi.ship_day BETWEEN to_date('20181001','yyyymmdd') AND to_date('20181031','yyyymmdd') OR ducsi.ship_day BETWEEN to_date('20191001','yyyymmdd') AND to_date('20191031','yyyymmdd'))
+and ducsi.gl_product_group not in (228,279) 
+and is_free_replacement != 'Y'
+and ducsi.condition = 6
+and ducsi.warehouse_id not in ('3PNA')
+
+
+GROUP BY 1,2,3,4
+)
+,
+event_business AS(
+select
+EXTRACT (YEAR FROM ship_day) as YEAR
+, event
+, e.program
+, d.f3_vertical
+, d.item_type_keyword
+, count(distinct order_id) as event_shipped_orders 
+, sum(SHIPPED_UNITS_ORIG*our_price) as event_p_rev
+, SUM(SHIPPED_UNITS_ORIG) AS event_units
+    
+from  f3_booker.d_unified_cust_shipment_items as ducsi
+
+
+LEFT JOIN f3_rbi.dim_event_asin e
+on e.asin = ducsi.asin
+AND e.region_id = ducsi.region_id
+AND e.program = ducsi.program
+
+LEFT JOIN f3edw.dim_asin d
+ON ducsi.asin = d.asin
+AND ducsi.marketplace_id = d.marketplace_id
+AND d.asin = e.asin
+    
+where ducsi.region_id = 1
+AND 
+(ducsi.ship_day BETWEEN to_date('20181001','yyyymmdd') AND to_date('20181031','yyyymmdd') OR ducsi.ship_day BETWEEN to_date('20191001','yyyymmdd') AND to_date('20191031','yyyymmdd'))
+and ducsi.gl_product_group not in (228,279) 
+and is_free_replacement != 'Y'
+and ducsi.condition = 6
+and ducsi.warehouse_id not in ('3PNA')
+AND event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+
+group by 1,2,3,4,5
+)
+,
+critical_event_business AS(
+select
+EXTRACT (YEAR FROM ship_day) as YEAR
+, event
+, e.program
+, d.f3_vertical
+, d.item_type_keyword
+, count(distinct order_id) as critical_event_shipped_orders 
+, sum(SHIPPED_UNITS_ORIG*our_price) as critical_event_p_rev
+, SUM(SHIPPED_UNITS_ORIG) AS critical_event_units
+    
+from  f3_booker.d_unified_cust_shipment_items as ducsi
+
+
+LEFT JOIN f3_rbi.dim_event_asin e
+on e.asin = ducsi.asin
+AND e.region_id = ducsi.region_id
+AND e.program = ducsi.program
+
+LEFT JOIN f3edw.dim_asin d
+ON ducsi.asin = d.asin
+AND ducsi.marketplace_id = d.marketplace_id
+AND d.asin = e.asin
+    
+where ducsi.region_id = 1
+AND 
+(ducsi.ship_day BETWEEN to_date('20181001','yyyymmdd') AND to_date('20181031','yyyymmdd') OR ducsi.ship_day BETWEEN to_date('20191001','yyyymmdd') AND to_date('20191031','yyyymmdd'))
+and ducsi.gl_product_group not in (228,279) 
+and is_free_replacement != 'Y'
+and ducsi.condition = 6
+and ducsi.warehouse_id not in ('3PNA')
+AND event = 'HALLOWEEN'
+AND critical_asin = 'Y'
+AND is_removed <> 'Y'
+
+group by 1,2,3,4,5
+)
+,
+
+--------------------------------------------------------------------------------
+fresh_event_asin_count AS(
+select
+year
+, program
+, COUNT (DISTINCT e.asin) AS event_asin_count
+, d.f3_vertical
+, d.item_type_keyword
+
+FROM f3_rbi.dim_event_asin e
+
+INNER JOIN f3edw.dim_asin d
+ON e.asin = d.asin
+AND e.region_id = d.region_id
+
+WHERE
+event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+AND marketplace_id IN (1)
+AND program = 'FRESH'
+
+GROUP BY 1,2,4,5
+)
+,
+uff_event_asin_count AS(
+select
+year
+, program
+, COUNT (DISTINCT e.asin) AS event_asin_count
+, d.f3_vertical
+, d.item_type_keyword
+
+FROM f3_rbi.dim_event_asin e
+
+INNER JOIN f3edw.dim_asin d
+ON e.asin = d.asin
+AND e.region_id = d.region_id
+
+WHERE
+event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+AND marketplace_id IN (1)
+AND program = 'ULTRA_FAST'
+
+GROUP BY 1,2,4,5
+)
+,
+pn_event_asin_count AS(
+select
+year
+, program
+, COUNT (DISTINCT e.asin) AS event_asin_count
+, d.f3_vertical
+, d.item_type_keyword
+
+FROM f3_rbi.dim_event_asin e
+
+INNER JOIN f3edw.dim_asin d
+ON e.asin = d.asin
+AND e.region_id = d.region_id
+
+WHERE
+event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+AND marketplace_id IN (1338980)
+AND program = 'PRIME_NOW'
+
+GROUP BY 1,2,4,5
+)
+,
+aggregate_asin_count AS (
+SELECT year, program, event_asin_count, f3_vertical, item_type_keyword
+FROM pn_event_asin_count
+
+UNION ALL
+
+SELECT year, program, event_asin_count, f3_vertical, item_type_keyword
+FROM fresh_event_asin_count
+
+UNION ALL
+
+SELECT year, program, event_asin_count, f3_vertical, item_type_keyword
+FROM uff_event_asin_count
+)
+,
+fresh_critical_event_asin_count AS(
+select DISTINCT
+year
+, program
+, COUNT (DISTINCT e.asin) AS critical_event_asin_count
+, d.f3_vertical
+, d.item_type_keyword
+
+FROM f3_rbi.dim_event_asin e
+
+INNER JOIN f3edw.dim_asin d
+ON e.asin = d.asin
+AND e.region_id = d.region_id
+
+WHERE
+event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+AND marketplace_id IN (1)
+AND program = 'FRESH'
+AND critical_asin = 'Y'
+
+GROUP BY 1,2,4,5
+)
+,
+uff_critical_event_asin_count AS(
+select DISTINCT
+year
+, program
+, COUNT (DISTINCT e.asin) AS critical_event_asin_count
+, d.f3_vertical
+, d.item_type_keyword
+
+FROM f3_rbi.dim_event_asin e
+
+INNER JOIN f3edw.dim_asin d
+ON e.asin = d.asin
+AND e.region_id = d.region_id
+
+WHERE
+event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+AND marketplace_id IN (1)
+AND program = 'ULTRA_FAST'
+AND critical_asin = 'Y'
+
+GROUP BY 1,2,4,5
+)
+,
+pn_critical_event_asin_count AS(
+select DISTINCT
+year
+, program
+, COUNT (DISTINCT e.asin) AS critical_event_asin_count
+, d.f3_vertical
+, d.item_type_keyword
+
+FROM f3_rbi.dim_event_asin e
+
+INNER JOIN f3edw.dim_asin d
+ON e.asin = d.asin
+AND e.region_id = d.region_id
+
+WHERE
+event = 'HALLOWEEN'
+AND is_removed <> 'Y'
+AND marketplace_id IN (1338980)
+AND program = 'PRIME_NOW'
+AND critical_asin = 'Y'
+
+GROUP BY 1,2,4,5
+),
+critical_aggregate_asin_count AS (
+SELECT year, program, critical_event_asin_count, f3_vertical, item_type_keyword
+FROM pn_critical_event_asin_count
+
+UNION ALL
+
+SELECT year, program, critical_event_asin_count, f3_vertical, item_type_keyword
+FROM fresh_critical_event_asin_count
+
+UNION ALL
+
+SELECT year, program, critical_event_asin_count, f3_vertical, item_type_keyword
+FROM uff_critical_event_asin_count
+)
+-------------------------------------------------------
+
+
+
+
+
+
+
+SELECT 
+b.year
+, b.program
+, b.f3_vertical
+, b.item_type_keyword
+, ag.event_asin_count
+, cag.critical_event_asin_count
+, event_shipped_orders 
+, critical_event_shipped_orders 
+, total_shipped_orders 
+, event_p_rev
+, critical_event_p_rev
+, total_p_rev
+, event_units
+, critical_event_units
+, total_units
+
+FROM total_business b
+
+LEFT OUTER JOIN  event_business e
+ON e.year = b.year
+AND e.program = b.program
+AND e.f3_vertical = b.f3_vertical
+AND e.item_type_keyword = b.item_type_keyword
+
+LEFT OUTER JOIN critical_event_business c
+ON c.year = b.year
+AND c.program = b.program
+AND c.f3_vertical = b.f3_vertical
+AND c.item_type_keyword = b.item_type_keyword
+
+LEFT OUTER JOIN aggregate_asin_count ag
+ON b.year = ag.year
+AND b.program = ag.program
+AND b.f3_vertical = ag.f3_vertical
+AND b.item_type_keyword = ag.item_type_keyword
+
+LEFT OUTER JOIN critical_aggregate_asin_count cag
+ON b.year = cag.year
+AND b.program = cag.program
+AND b.f3_vertical = cag.f3_vertical
+AND b.item_type_keyword = cag.item_type_keyword

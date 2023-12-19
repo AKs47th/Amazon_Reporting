@@ -1,0 +1,66 @@
+WITH ITK AS (
+SELECT DISTINCT item_type_keyword
+FROM f3edw.dim_asin 
+where region_id = 1
+AND marketplace_id = 1
+AND ASIN IN ( )
+    )
+    , ASIN_breakout AS (
+    SELECT DISTINCT ASIN
+    FROM f3edw.dim_asin 
+    where region_id = 1
+    AND marketplace_id = 1
+    AND item_type_keyword IN (SELECT item_type_keyword FROM ITK)
+    )
+
+SELECT  p.asin
+, p.vendor_code
+, p.warehouse_id
+, p.earliest_vendor_ship_date AS EVSD
+, p.latest_vendor_ship_date as LVSD
+, p.was_received
+, trunc(p.order_day) as order_day
+, SUM(p.qty_submitted) AS qty_submitted
+,SUM(p.qty_confirmed) AS qty_confirmed
+,SUM(p.qty_received) AS qty_received
+from f3edw.fact_po_line p
+
+where p.warehouse_id NOT IN ('3PNA')
+AND vendor_code in ( '8XX1P','CUMF5','IN16L','NBTYL','PHBEQ','VATB4')
+AND order_day >= to_date('20201125','YYYYMMDD') -21
+AND ASIN IN (SELECT ASIN FROM ASIN_breakout)
+AND p.po_condition like 'C%'
+    
+GROUP BY 
+ 1,2,3,4,5,6,7
+
+-----------------------------------------------------------------------------------
+
+INVENTORY QUERY
+
+WITH ITK AS (
+SELECT DISTINCT item_type_keyword
+FROM f3edw.dim_asin 
+where region_id = 1
+AND marketplace_id = 1
+AND ASIN IN ( )
+    )
+    , ASIN_breakout AS (
+    SELECT DISTINCT ASIN
+    FROM f3edw.dim_asin 
+    where region_id = 1
+    AND marketplace_id = 1
+    AND item_type_keyword IN (SELECT item_type_keyword FROM ITK)
+    )
+    
+SELECT
+     ASIN,
+     warehouse_id,
+     snapshot_date,
+	sum(quantity) as inventory
+	
+	
+FROM f3edw.fact_inventory_snapshot
+WHERE ASIN IN (SELECT ASIN FROM ASIN_breakout)
+AND snapshot_date> to_date('20201125','YYYYMMDD') -2
+GROUP BY 1,2,3

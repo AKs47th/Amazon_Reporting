@@ -1,0 +1,173 @@
+drop table if exists brand_mapping ;
+
+CREATE TEMP TABLE brand_mapping (
+ASIN VARCHAR(90),
+brand VARCHAR(90), 
+category VARCHAR(90),
+timing VARCHAR(90),
+occasion VARCHAR(90),
+format_type VARCHAR(90),
+f3ast_status VARCHAR(90),
+forecast_increase VARCHAR(90),
+mothers_day_cost_correction NUMERIC(4,2)
+)
+;
+
+
+/* Copy data from a file in S3 to the table you created above */
+copy brand_mapping
+from 's3://f3-rbi/retail_folder/boa_hpc/Hallmark_brand_mapping_71420.csv' 
+iam_role 'arn:aws:iam::932438937876:role/RedshiftAccessRole,arn:aws:iam::767926513936:role/RedshiftAccessRole'
+delimiter ','
+;
+
+drop table if exists ALL_HALLMARK_ASINS
+;
+CREATE TEMP TABLE ALL_HALLMARK_ASINS AS 
+    select distinct
+        
+        asins.ISBN AS ASIN
+        
+  	 from f3_booker.d_distributor_order_items asins
+    
+  	 where asins.region_id = 1
+        and asins.distributor_id in ('HAM0U','HAM3B','HBAQK','OPJSH','TFL50','HLMKO', 'HB8IR', 'HMKGP')
+        
+;
+
+drop table if exists final_brand_mapping ;
+
+CREATE TEMP TABLE final_brand_mapping AS 
+SELECT DISTINCT
+a.asin
+, a.item_name
+, b.brand
+, b.category
+, b.timing
+, b.occasion
+, b.format_type
+, f3ast_status
+, forecast_increase
+, mothers_day_cost_correction
+
+FROM
+ f3edw.dim_asin a
+ 
+FULL OUTER JOIN brand_mapping b
+ON a.asin = b.asin
+
+    
+WHERE a.marketplace_ID = 1
+AND a.region_id = 1
+AND( 
+        (brand_name IN 
+        	('Dayspring','HALLMARK VIDA','Hallmark','Hallmark Keepsake','Hallmark Mahogany',
+        	'Hallmark Signature','Image Arts','Korlon','Signature'))
+	OR (a.ASIN IN (SELECT DISTINCT ASIN FROM brand_mapping))
+	OR (a.ASIN IN (SELECT DISTINCT ASIN FROM all_hallmark_asins 
+        	where ASIN NOT IN 
+            	('B073Q94MGL','B074H55FRR','B074H55G5M','B074H5HM8L','B074H5Y1FW','B074H681MM','B074H6G7W2',
+            	'B074H81MM8','B074HBMFT4')))
+   )
+;
+drop table if exists live_stores ;
+
+CREATE TEMP TABLE live_stores AS 
+(select merchant_customer_id, 
+merchant_name,
+warehouse_id, 
+marketplace_id,
+min(launch_date)launch_Date 
+from f3edw.dim_rmets_mapping m 
+where region_id in (1)
+  and marketplace_id in (1, 1338980, 884070040)
+  and nvl(is_retail, '') = 'Y' 
+  and nvl(is_hub, '') = 'N'
+  and launch_date < sysdate
+group by 1,2,3,4
+)
+;
+SELECT
+    CASE WHEN ducsi.marketplace_id = '884070040' THEN 'Fresh Physical Store Instore' 
+    WHEN ducsi.marketplace_id = '1' and ducsi.ordered_ship_option IN ('std-pickup','inst') THEN 'Fresh Physical Store Pickup' 
+    WHEN ducsi.marketplace_id = '1338980' THEN 'Prime Now'
+    WHEN lss.merchant_name = 'Mendel' and ducsi.marketplace_id = '1' AND ducsi.ordered_ship_option NOT IN ('std-pickup','inst') THEN 'Fresh Physical Store Delivery'
+    WHEN lss.merchant_name != 'Mendel' and ducsi.marketplace_id = '1' AND ducsi.ordered_ship_option IN ('fresh-pickup', 'fresh-express-pickup') THEN 'Fresh Warehouse Pickup'
+    WHEN lss.merchant_name != 'Mendel' and ducsi.marketplace_id = '1' AND ducsi.ordered_ship_option NOT IN ('fresh-pickup', 'fresh-express-pickup') THEN 'Fresh Warehouse Delivery'
+    ELSE 'Unknown' END AS business
+    , ship_day
+    , ducsi.warehouse_id as fc_code
+    , ducsi.asin 
+    , da.item_name
+    , COUNT(DIStINCT ducsi.order_id) AS orders
+    , sum(ducsi.shipped_units) as units
+    , sum(ducsi.shipped_units*ducsi.our_price)::numeric(38,4) as product_revenue
+    , CASE
+    	WHEN EXTRACT(YEAR FROM ship_day) = 2019 THEN (
+        	CASE WHEN mothers_day_cost_correction IS NOT NULL
+            THEN sum(ducsi.shipped_units*mothers_day_cost_correction)::numeric(38,4)
+            ELSE sum(ducsi.shipped_units*ducsi.item_fifo_cost)::numeric(38,4)
+            END)
+        ELSE sum(ducsi.shipped_units*ducsi.item_fifo_cost)::numeric(38,4)
+        END AS pcogs
+    , EXTRACT(YEAR FROM ship_day) AS Year
+    , EXTRACT(MONTH FROM ship_day) AS Month
+    , CASE
+    WHEN MONTH = 1 THEN 'January'
+    WHEN MONTH = 2 THEN 'February'
+    WHEN MONTH = 3 THEN 'March'
+    WHEN MONTH = 4 THEN 'April'
+    WHEN MONTH = 5 THEN 'May'
+    WHEN MONTH = 6 THEN 'June'
+    WHEN MONTH = 7 THEN 'July'
+    WHEN MONTH = 8 THEN 'August'
+    WHEN MONTH = 9 THEN 'September'
+    WHEN MONTH = 10 THEN 'October'
+    WHEN MONTH = 11 THEN 'November'
+    ELSE 'December' 
+    END AS Month_name
+    , EXTRACT(WEEK FROM ship_day) AS Week_number
+    , b.Brand
+    , b.Category
+    , b.Timing
+    , b.Occasion
+    , b.Format_Type
+    FROM
+    f3edw.dim_asin da
+LEFT JOIN f3_booker.d_unified_cust_shipment_items ducsi 
+    ON da.asin = ducsi.asin 
+    AND da.marketplace_id = ducsi.marketplace_id
+    AND da.region_id = ducsi.region_id 
+LEFT join live_stores lss
+	ON ducsi.merchant_customer_id=lss.merchant_customer_id
+    AND ducsi.marketplace_id=lss.marketplace_id
+LEFT JOIN final_brand_mapping b
+    ON da.asin = b.asin
+
+WHERE 
+     ducsi.marketplace_id in (1,1338980,884070040) 
+     AND ducsi.ship_day > sysdate-10
+     AND ducsi.region_id in (1) 
+     AND ducsi.warehouse_id not in ('MAE1', '3PNA', 'UUU1')
+     AND ducsi.ASIN IN (SELECT ASIN FROM final_brand_mapping)
+     
+
+GROUP BY
+     SHIP_DAY
+    ,ducsi.warehouse_id
+    ,ducsi.marketplace_id
+    ,ducsi.ordered_ship_option
+    ,lss.merchant_name
+    ,ducsi.asin 
+    ,da.item_name
+    ,Year
+    ,Month
+    ,Month_name
+    ,Week_number
+    ,b.Brand
+    ,b.Category
+    ,b.Timing
+    ,b.Occasion
+    ,b.Format_Type
+    ,mothers_day_cost_correction
+;
